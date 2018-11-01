@@ -32,8 +32,8 @@ class ColieeHTMLParser(HTMLParser):
     def get_text(self):
         return self.text
 
-#this token is open api explorer's JWT_token
-token_val='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1MDZwNnB4a204eXdlNHciLCJpYXQiOjE1NDA4MzM3Mjl9.QCSYhXT6UN-v3q7qTovB8IkLs9y19uAcGBRZcIL2N9Q'
+
+token_val=''
 
 def query_cite_by_id(case_id):
     """
