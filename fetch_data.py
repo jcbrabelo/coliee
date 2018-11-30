@@ -32,7 +32,7 @@ class ColieeHTMLParser(HTMLParser):
     def get_text(self):
         return self.text
 
-
+#open api explorer's JWT_token
 token_val=''
 
 def query_cite_by_id(case_id):
@@ -94,10 +94,13 @@ def fetch_store (from_file, to_folder):
         id_path = os.path.join(to_folder, id)
         if not os.path.exists(id_path):
             print('Fetching contents for id ', id)
-            contents, json_resp = request_case_headnote_content(id)
-            print('Writing to disk contents for id ', id)
-            store_case_contents(id, id_path, contents, json_resp)
-                
+            try:
+                contents, json_resp = request_case_headnote_content(id)
+                print('Writing to disk contents for id ', id)
+                store_contents(id, id_path, contents, json_resp)
+            except:
+                print('could not retrieve contents for id: ', id)
+
             time.sleep(1)
 
         else:
@@ -110,21 +113,21 @@ def store_contents(id, id_path, contents, json_resp):
     if not os.path.exists(id_path):
         os.makedirs(id_path)
 
-    with open(os.path.join(id_path, "contents.html"), "w") as content_file:
+    with open(os.path.join(id_path, 'contents.html'), mode='w', encoding='UTF-8') as content_file:
         if contents is not None and contents.get('content') is not None:
             content_file.write(contents['content'])
         else:
             print('No contents for id ', id)
             content_file.write('')
 
-    with open(os.path.join(id_path, "headnotes.html"), "w") as headnotes_file:
+    with open(os.path.join(id_path, 'headnotes.html'), mode='w', encoding='UTF-8') as headnotes_file:
         if contents is not None and contents.get('headnotes') is not None:
             headnotes_file.write(contents['headnotes'])
         else:
             print('No headnotes for id ', id)
             headnotes_file.write('')
 
-    with open(os.path.join(id_path, "response.json"), "w") as json_file:
+    with open(os.path.join(id_path, 'response.json'), mode='w', encoding='UTF-8') as json_file:
         if json_resp is not None:
             json_file.write(json_resp)
         else:
@@ -162,8 +165,12 @@ def fetch_cited(src_folder):
                 if len(cited_id) < 20:
                     id_path = os.path.join(src_folder, cited_id) 
                     if not os.path.exists(os.path.join(id_path, "contents.html")):
-                        contents, json_resp = request_case_headnote_content(cited_id)
-                        store_contents(cited_id, id_path, contents, json_resp)
+                        try:
+                            contents, json_resp = request_case_headnote_content(cited_id)
+                            store_contents(cited_id, id_path, contents, json_resp)
+                            time.sleep(0.5)
+                        except:
+                            print('could not download id: ', cited_id)
                     else:
                         print('Contents already exist for id ',cited_id)
                 else:
