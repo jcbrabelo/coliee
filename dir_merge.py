@@ -49,22 +49,29 @@ def merge_subdir(subdir, dir1, dir2, output_dir, index_file):
         for f in files2:
             merge_files(f, subdir1, subdir2, output_subdir)
 
+    update_index(subdir, output_subdir, index_file)
+
+
+def update_index(case_id, output_subdir, index_file):
     merged_files = os.listdir(output_subdir)
-    update_index(subdir, merged_files, index_file)
 
-
-def update_index(case_id, merged_files, index_file):
-    has_contents = '0'
-    has_headnotes = '0'
-    has_cites = '0'
-    if 'contents.html' in merged_files:
-        has_contents = '1'
-    if 'headnotes.html' in merged_files:
-        has_headnotes = '1'
-    if 'cites.txt' in merged_files:
-        has_cites = '1'
+    has_contents = check_file('contents.html', output_subdir, merged_files)
+    has_headnotes = check_file('headnotes.html', output_subdir, merged_files)
+    has_cites = check_file('cites.txt', output_subdir, merged_files)
 
     index_file.write(case_id+','+has_contents+','+has_headnotes+','+has_cites+'\n')
+
+
+def check_file(filename, dir, merged_files):
+    file_flag = '0'
+    if filename in merged_files:
+        filepath = os.path.join(dir, filename)
+        if not is_file_empty(filepath):
+            file_flag = '1'
+        else:
+            os.remove(filepath)
+
+    return file_flag
 
 
 def merge_files(filename, dir1, dir2, output_subdir):
@@ -94,7 +101,37 @@ def merge_files(filename, dir1, dir2, output_subdir):
             shutil.copy(filepath1, dstpath)
 
 
+def check_contents(input_dir):
+    index_filepath = os.path.join(input_dir, 'index.txt')
+    new_index_filepath = os.path.join(input_dir, 'new_index.txt')
+    with open(new_index_filepath, 'w') as new_index_file:
+        with open(index_filepath, 'r') as index_file:
+            for line in index_file:
+                parts = line.split(',')
+
+                subdir = os.path.join(input_dir, parts[0])
+
+                has_contents = '0'
+                has_headnotes = '0'
+                has_cites = '0'
+                if not is_file_empty(os.path.join(subdir, 'contents.html')):
+                    has_contents = '1'
+                if not is_file_empty(os.path.join(subdir, 'headnotes.html')):
+                    has_headnotes = '1'
+                if not is_file_empty(os.path.join(subdir, 'cites.txt')):
+                    has_cites = '1'
+
+                    new_index_file.write(parts[0] + ',' + has_contents + ',' + has_headnotes + ',' + has_cites + '\n')
+
+
+def is_file_empty(filepath):
+    with open(filepath, mode='r', encoding='utf-8', errors='ignore') as f:
+        contents = f.read()
+        return len(contents.strip()) == 0
+
 if __name__ == '__main__':
-    merge('/Users/administrator/Documents/coliee2019/data_fetch/test_files1',
-          '/Users/administrator/Documents/coliee2019/data_fetch/test_files2',
-          '/Users/administrator/Documents/coliee2019/data_fetch/test_files_merged')
+    merge('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files',
+          'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\from_notebook',
+          'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged')
+
+#    check_contents('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged')
