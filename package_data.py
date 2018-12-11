@@ -2,6 +2,7 @@ import os
 from html.parser import HTMLParser
 import shutil
 from random import shuffle
+import re
 
 class ColieeHTMLParser(HTMLParser):
     def __init__(self):
@@ -27,6 +28,62 @@ class ColieeHTMLParser(HTMLParser):
     def get_text(self):
         return self.text
 
+
+class ColieeParagraphsHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.paragraphs = []
+        self.span0 = False
+        self.found_parag = False
+        self.parag_pat = re.compile('\\[(\\d{1,4})\\]')
+        self.current_paragraph_text = ''
+        self.current_paragraph_number = 0
+
+    def handle_data(self, data):
+        paragraph_number = self.parse_paragraph_number(data)
+        new_parag = self.span0 and self.is_valid_paragraph(paragraph_number)
+        if new_parag:
+            if self.current_paragraph_number > 0:
+                self.paragraphs.append((self.current_paragraph_number, self.current_paragraph_text))
+            self.current_paragraph_text = ''
+            self.current_paragraph_number = paragraph_number
+            self.found_parag = True
+        elif self.found_parag:
+            self.current_paragraph_text += data
+
+    def handle_starttag(self, tag, attrs):
+        self.span0 = tag.lower() == 'span' and ('class', 'span0') in attrs
+
+    def handle_endtag(self, tag):
+        """Useless implementation because some html files don't contain <html> and </html> tags. See flush()"""
+        pass
+#       if tag.lower() == 'html' and len(self.current_paragraph_text) > 0:
+#           self.paragraphs.append((self.current_paragraph_number, self.current_paragraph_text))
+
+    def get_paragraphs(self):
+        return self.paragraphs
+
+    def parse_paragraph_number(self, data):
+        m = self.parag_pat.match(data.strip())
+        if m:
+            return int(m.group(1))
+        else:
+            return -1
+
+    def is_valid_paragraph(self, paragraph_number):
+        return paragraph_number == self.current_paragraph_number + 1
+
+    def flush(self):
+        """Since the html files don't necessarily contain <html> and </html> tags, we don't know for sure
+        when it's EOF so we can add the last paragraph. Thus, we need this 'hack' to make sure the last paragraph
+        is added to the list. Any user of this class must call the flush() method before retrieving the
+        paragraph list"""
+        if len(self.current_paragraph_text) > 0:
+            self.paragraphs.append((self.current_paragraph_number, self.current_paragraph_text))
+            self.current_paragraph_text = ''
+            self.current_paragraph_number = 0
+
+
 class ColieeSummaryHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -35,7 +92,7 @@ class ColieeSummaryHTMLParser(HTMLParser):
         self.is_summary = False
 
     def handle_data(self, data):
-        if self.is_summary:
+        if self.is_summary and len(data.strip()) > 0:
             self.summary_text += ' ' + data
             self.is_summary = False
 
@@ -126,8 +183,6 @@ def create_ir_case(input_dir, case_id, output_dir, cited_list, num_candidates_pe
 
         store_case_text(input_dir, case_id, output_casepath, True)
 
-
-
         with (open(os.path.join(output_casepath, 'true_noticed.txt'), mode='w')) as true_noticed_file:
             for cited_id in cited_list:
                 cited_src_path = os.path.join(input_dir, cited_id)
@@ -185,44 +240,85 @@ def store_case_text(html_folder, case_folder, output_folder, is_base_case):
     content_filepath = os.path.join(html_folder, case_folder, 'contents.html')
     headnotes_filepath = os.path.join(html_folder, case_folder, 'headnotes.html')
     if os.path.exists(content_filepath):
-        with open(content_filepath, mode='r', encoding='utf-8', errors='ignore') as cont_file:
-            raw_contents = cont_file.read()
-            parser = ColieeHTMLParser()
-            parser.feed(raw_contents)
-            contents = parser.get_text()
-            parser.close()
+        if is_base_case:
+            paragraphs = extract_paragraphs(content_filepath)
+            contents = ''
+            for p in paragraphs:
+                contents += '['+str(p[0])+'] ' + p[1]
+            out_contents_file = os.path.join(output_folder, 'fact.txt')
 
+            summary = extract_summary(content_filepath, headnotes_filepath)
+            out_summary_file = os.path.join(output_folder, 'summary.txt')
+            with open(out_summary_file, mode='w', encoding='utf-8') as summary_file:
+                summary_file.write(summary)
+        else:
+            contents = extract_text(content_filepath, headnotes_filepath)
             out_contents_file = os.path.join(output_folder, case_folder + '.txt')
-            if is_base_case:
-                out_contents_file = os.path.join(output_folder, 'fact.txt')
-                #TODO contents = get+paragraphs(contents)
 
-            with open(out_contents_file, mode='w', encoding='utf-8') as main_file:
-                main_file.write(contents)   #TODO: keep only paragraphs if base case
-
-        if os.path.exists(headnotes_filepath) and is_base_case:
-            with open(headnotes_filepath, mode='r', encoding='utf-8', errors='ignore') as head_file:
-                raw_headnotes = head_file.read()
-                #parser = ColieeHTMLParser()
-                #parser.feed(raw_headnotes)
-                #headnotes = parser.get_text()
-                #parser.close()
-
-                parser = ColieeSummaryHTMLParser()
-                parser.feed(raw_headnotes)
-                summary = parser.get_summary()
-                parser.close()
-
-                out_summary_file = os.path.join(output_folder, 'summary.txt')
-                with open(out_summary_file, mode='w', encoding='utf-8') as summary_file:
-                    summary_file.write(summary)
+        with open(out_contents_file, mode='w', encoding='utf-8') as main_file:
+            main_file.write(contents)
 
         return True
     else:
         return False
 
 
+def extract_text(content_filepath, headnotes_filepath):
+    headnotes = ''
+    if os.path.exists(headnotes_filepath):
+        with open(headnotes_filepath, mode='r', encoding='utf-8', errors='ignore') as head_file:
+            raw_headnotes = head_file.read()
+            parser = ColieeHTMLParser()
+            parser.feed(raw_headnotes)
+            headnotes = parser.get_text() + '\n'
+            parser.close()
+
+    contents = ''
+    if os.path.exists(content_filepath):
+        with open(content_filepath, mode='r', encoding='utf-8', errors='ignore') as cont_file:
+            raw_content = cont_file.read()
+            parser = ColieeHTMLParser()
+            parser.feed(raw_content)
+            contents = parser.get_text()
+            parser.close()
+
+    return headnotes + contents
+
+
+def extract_paragraphs(content_filepath):
+    if os.path.exists(content_filepath):
+        with open(content_filepath, mode='r', encoding='utf-8', errors='ignore') as cont_file:
+            raw_content = cont_file.read()
+            parser = ColieeParagraphsHTMLParser()
+            parser.feed(raw_content)
+            parser.flush()
+            paragraphs = parser.get_paragraphs()
+            parser.close()
+            return paragraphs
+
+    return None
+
+
+def extract_summary(content_filepath, headnotes_filepath):
+    summary = ''
+    if os.path.exists(headnotes_filepath):
+        with open(headnotes_filepath, mode='r', encoding='utf-8', errors='ignore') as head_file:
+            raw_headnotes = head_file.read()
+            parser = ColieeSummaryHTMLParser()
+            parser.feed(raw_headnotes)
+            summary = parser.get_summary()
+            parser.close()
+    elif os.path.exists(content_filepath):
+        with open(content_filepath, mode='r', encoding='utf-8', errors='ignore') as cont_file:
+            raw_content = cont_file.read()
+            parser = ColieeSummaryHTMLParser()
+            parser.feed(raw_content)
+            summary = parser.get_summary()
+            parser.close()
+
+    return summary
+
 if __name__ == '__main__':
     prepare_ir_data_with_index('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged',
-                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files',
+                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files_20181210',
                     num_candidates_per_case=200)
