@@ -111,6 +111,29 @@ class ColieeSummaryHTMLParser(HTMLParser):
         return self.summary_text
 
 
+class ColieeFactsHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.has_fact_section = False
+        self.span = False
+
+    def handle_data(self, data):
+        clean_data = data.strip()
+        if self.span and len(clean_data) > 0:
+            if clean_data.lower() in ('facts', 'background'):
+                self.has_fact_section = True
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == 'span':
+            self.span = True
+
+    def handle_endtag(self, tag):
+        if tag.lower() == 'span':
+            self.span = False
+
+    def has_facts(self):
+        return self.has_fact_section
+
 def prepare_ir_data(input_dir, output_dir, num_candidates_per_case=200):
     all_cases_list = os.listdir(input_dir)
     for case_folder in os.listdir(input_dir):
@@ -174,6 +197,18 @@ def read_index(input_dir):
     return base_cases, candidates
 
 
+def case_has_fact_section(input_dir, case_id):
+    casepath = os.path.join(input_dir, case_id, 'contents.html')
+    with open(casepath, mode='r', encoding='utf-8', errors='ignore') as f:
+        contents = f.read()
+        parser = ColieeFactsHTMLParser()
+        parser.feed(contents)
+        has_fact = parser.has_fact_section
+        parser.close()
+
+        return has_fact
+
+
 def create_ir_case(input_dir, case_id, output_dir, cited_list, num_candidates_per_case, all_candidates):
     if len(cited_list) > 0:
         output_casepath = os.path.join(output_dir, case_id)
@@ -181,7 +216,10 @@ def create_ir_case(input_dir, case_id, output_dir, cited_list, num_candidates_pe
         candidates_path = os.path.join(output_casepath, 'candidates')
         os.makedirs(candidates_path)
 
-        store_case_text(input_dir, case_id, output_casepath, True)
+        if not store_case_text(input_dir, case_id, output_casepath, True) or not case_has_fact_section(input_dir, case_id):
+            print('base case probably incomplete or has no explicit fact section. removing dir...')
+            shutil.rmtree(output_casepath)
+            return
 
         with (open(os.path.join(output_casepath, 'true_noticed.txt'), mode='w')) as true_noticed_file:
             for cited_id in cited_list:
@@ -221,7 +259,6 @@ def create_ir_case(input_dir, case_id, output_dir, cited_list, num_candidates_pe
         print('total files in the candidates folder: ', len(os.listdir(candidates_path)))
 
 
-
 def parse_html_folder(html_folder, output_folder):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -239,7 +276,7 @@ def parse_html_folder(html_folder, output_folder):
 def store_case_text(html_folder, case_folder, output_folder, is_base_case):
     content_filepath = os.path.join(html_folder, case_folder, 'contents.html')
     headnotes_filepath = os.path.join(html_folder, case_folder, 'headnotes.html')
-    if os.path.exists(content_filepath):
+    if os.path.exists(content_filepath) and is_valid_html(content_filepath):
         if is_base_case:
             paragraphs = extract_paragraphs(content_filepath)
             contents = ''
@@ -260,6 +297,7 @@ def store_case_text(html_folder, case_folder, output_folder, is_base_case):
 
         return True
     else:
+        print(content_filepath)
         return False
 
 
@@ -318,7 +356,18 @@ def extract_summary(content_filepath, headnotes_filepath):
 
     return summary
 
+
+def is_valid_html(filepath):
+    with open(filepath, 'r', errors='ignore') as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(f.tell() - 10, os.SEEK_SET)
+        s = f.read(10)
+        s = s.strip()
+        return s.endswith('>')
+
+
 if __name__ == '__main__':
     prepare_ir_data_with_index('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged',
-                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files_20181210',
+                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files_20181214-3',
                     num_candidates_per_case=200)
+
