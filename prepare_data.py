@@ -1,4 +1,5 @@
 import re
+import os
 
 vs_pat = re.compile('\\svs?\\.?\\s')
 end_ref_pats = [re.compile('\\s\\d{4}\\s+[A-Z\\.]{2,8}\\s+\\d{1,4}(?:\\s+at\\s+para(?:graph)?s?\\s+[\\d\\,\\-\\sand]+)?'),
@@ -83,9 +84,27 @@ def process_match(occur, txt):
     return ref_start, ref_end
 
 
+def replace_citation_placeholder(old_placeholders, new_placeholder, input_dir):
+    folders = os.listdir(input_dir)
+    for folder in folders:
+        print('processing  '+folder)
+        folder_path = os.path.join(input_dir, folder)
+        filepath = os.path.join(folder_path, folder + '_blackedout.txt')
+        with open(filepath, mode='r', encoding='utf-8', errors='ignore') as fin:
+            new_text = fin.read()
+            for placeholder in old_placeholders:
+                new_text = new_text.replace(placeholder, new_placeholder)
+
+            out_filepath = os.path.join(folder_path, folder + '_blackedout-final.txt')
+            with open(out_filepath, mode='w', encoding='utf-8', errors='ignore') as fout:
+                fout.write(new_text)
+
+
 def adjust_whitespaces(txt):
     return re.sub(space_pat, ' ', txt)
 
+
 if __name__ == '__main__':
     #blackout_refs('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_FILES_350\\r06p2yed4fporky\\fact.txt', 'c:\\juliano\\blackedout.txt')
-    blackout_refs('C:\\juliano\\dev\\data\\coliee2019\\test.txt', 'c:\\juliano\\blackedout.txt')
+    #blackout_refs('C:\\juliano\\dev\\data\\coliee2019\\test.txt', 'c:\\juliano\\blackedout.txt')
+    replace_citation_placeholder(['CITATION_SUPPRESSED', 'REFERENCE_SUPPRESSED'], 'FRAGMENT_SUPPRESSED', 'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_FILES_350')

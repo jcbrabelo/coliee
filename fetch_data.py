@@ -33,7 +33,7 @@ class ColieeHTMLParser(HTMLParser):
         return self.text
 
 #open api explorer's JWT_token
-token_val=''
+token_val='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1MDZwNnB4a204eXdlNHciLCJpYXQiOjE1NDA4MzM3Mjl9.QCSYhXT6UN-v3q7qTovB8IkLs9y19uAcGBRZcIL2N9Q'
 
 def query_cite_by_id(case_id):
     """
@@ -209,7 +209,14 @@ def parse_html_folder(html_folder, output_folder):
             with open (txt_file, 'w') as txt_file:
                 txt_file.write(headnotes + '\n' +contents)
 
-        
+'''
+def refetch_defective (input_dir):
+    case_folders = os.listdir(input_dir)
+    for case_id in case_folders:
+        contents, json_resp = request_case_headnote_content(case_id)
+        content_file.write(contents['content'])
+'''
+
 if __name__ == '__main__':
     #query_cite_by_id('r06p2ygc993ea1w')
     #json, txt = request_case_headnote_content('r06p2ygc993ea1w')
@@ -221,7 +228,7 @@ if __name__ == '__main__':
 
     #parse_html_folder('/Users/administrator/Documents/coliee2019/data_fetch/files', '/Users/administrator/Documents/coliee2019/data_fetch/txt')
 
-    fetch_cited('/Users/administrator/Documents/coliee2019/data_fetch/files')
+    fetch_cited('C:\\juliano\\dev\\data\\coliee2019\\files')
 
     '''
     contents, json_resp = request_case_headnote_content('UaHR0cDovL3ZsZXguY29tL3ZpZC82ODE2NzExMDU=')

@@ -4,6 +4,8 @@ import shutil
 from random import shuffle
 import re
 
+FULL_REF_PAT = re.compile('\\s\\d{4}\\s+[A-Z\\.]{2,8}\\s+\\d{1,4}.{0,10}para(?:graph)?s?')
+
 class ColieeHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -133,6 +135,7 @@ class ColieeFactsHTMLParser(HTMLParser):
 
     def has_facts(self):
         return self.has_fact_section
+
 
 def prepare_ir_data(input_dir, output_dir, num_candidates_per_case=200):
     all_cases_list = os.listdir(input_dir)
@@ -297,7 +300,7 @@ def store_case_text(html_folder, case_folder, output_folder, is_base_case):
 
         return True
     else:
-        print(content_filepath)
+        print('invalid path or invalid html contents for: '+content_filepath)
         return False
 
 
@@ -357,6 +360,72 @@ def extract_summary(content_filepath, headnotes_filepath):
     return summary
 
 
+def prepare_entail_data(input_dir, task1_dir, output_dir):
+    '''
+    Prepares an entailment task dataset
+    :param input_dir: source dir with raw (html) data containing an index file
+    :param task1_dir: dir with the prepared dataset for task 1. If this parameter is set, the function will not include in the task2
+    dataset a case which is a task1 base case
+    :param output_dir: where the task2 dataset is going to be saved. Cases already in this output_dir will be skipped
+    :return:
+    '''
+    entailed_cases, candidates = read_index(input_dir)
+    existing_cases = os.listdir(output_dir)
+    task1_cases = []
+    if len(task1_dir) > 0 and os.path.exists(task1_dir):
+        task1_cases = os.listdir(task1_dir)
+
+    for entailed_case_id in entailed_cases:
+        if entailed_case_id in task1_cases:
+            print('skipping case used for task1: '+entailed_case_id)
+            continue
+
+        if entailed_case_id in existing_cases:
+            print('skipping case already used in task2: ' + entailed_case_id)
+            continue
+
+        cited_by_case = load_cited(os.path.join(input_dir, entailed_case_id))
+        create_entail_case(input_dir, entailed_case_id, output_dir, cited_by_case)
+
+
+def case_has_entail_candidates(case_dir, case_id):
+    content_path = os.path.join(case_dir, case_id+'.txt')
+    with open(content_path, mode='r', encoding='utf-8', errors='ignore') as cont_file:
+        contents = cont_file.read()
+
+        return re.search(FULL_REF_PAT, contents) is not None
+
+
+def create_entail_case(input_dir, case_id, output_dir, cited_list):
+    if len(cited_list) > 0:
+        output_casepath = os.path.join(output_dir, case_id)
+        os.makedirs(output_casepath)
+        cited_path = os.path.join(output_casepath, 'cited')
+        os.makedirs(cited_path)
+
+        if not store_case_text(input_dir, case_id, output_casepath, False):
+            print('base case probably incomplete. removing dir...')
+            shutil.rmtree(output_casepath)
+            return
+
+        if not case_has_entail_candidates(output_casepath, case_id):
+            print('base case does not contain clear entailed sentences candidates. removing dir...')
+            shutil.rmtree(output_casepath)
+            return
+
+        for cited_id in cited_list:
+            cited_src_path = os.path.join(input_dir, cited_id)
+            if os.path.exists(cited_src_path):
+                if not store_case_text(input_dir, cited_id, cited_path, False):
+                    print('could not store cited case at: '+cited_path)
+
+        cited_written = len(os.listdir(cited_path))
+        print('cited cases written: ', cited_written)
+        if cited_written == 0:
+            print('no cited cases were written. removing dir...')
+            shutil.rmtree(output_casepath)
+
+
 def is_valid_html(filepath):
     with open(filepath, 'r', errors='ignore') as f:
         f.seek(0, os.SEEK_END)
@@ -366,8 +435,215 @@ def is_valid_html(filepath):
         return s.endswith('>')
 
 
-if __name__ == '__main__':
-    prepare_ir_data_with_index('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged',
-                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files_20181214-3',
-                    num_candidates_per_case=200)
+def package_task2_dataset(input_dir, output_dir):
+    folders = os.listdir(input_dir)
+    #os.makedirs(output_dir)
+    for folder in folders:
+        ent_frag_filepath = os.path.join(input_dir, folder, 'entailed_fragment.txt')
+        if os.path.exists(ent_frag_filepath):
+            print('copying: '+folder)
+            shutil.copytree(os.path.join(input_dir, folder), os.path.join(output_dir, folder))
 
+
+def package_task1_release(input_dir, output_dir, training_size):
+    os.makedirs(output_dir)
+
+    cases = os.listdir(input_dir)
+    indices = list(range(0, len(cases)))
+    shuffle(indices)
+    train_indices = indices[:training_size]
+    test_indices = indices[training_size:]
+
+    train_cases = [cases[i] for i in train_indices]
+    test_cases = [cases[i] for i in test_indices]
+
+    package_task1_cases(input_dir, train_cases, os.path.join(output_dir, 'train'))
+    package_task1_cases(input_dir, test_cases, os.path.join(output_dir, 'test'))
+
+
+def package_task1_cases(input_dir, cases, output_dir):
+    os.makedirs(output_dir)
+    mapping_filepath = os.path.join(output_dir, 'mapping.txt')
+    with open(mapping_filepath, 'w') as map_file:
+        case_number = 1
+        for c in cases:
+            print('processing '+c)
+            output_case_folder = os.path.join(output_dir, '{:03d}'.format(case_number))
+            output_candidates_folder = os.path.join(output_case_folder, 'candidates')
+            os.makedirs(output_candidates_folder)
+            output_base_case_filepath = os.path.join(output_case_folder, 'base_case.txt')
+            input_case_folder =  os.path.join(input_dir, c)
+            input_base_case_filepath = os.path.join(input_case_folder, c + '_blackedout-final.txt')
+            map_file.write(input_case_folder + '=' + output_case_folder + '\n')
+
+            shutil.copy(input_base_case_filepath, output_base_case_filepath)
+            input_candidates_folder = os.path.join(input_dir, c, 'candidates')
+            true_noticed_filepath = os.path.join(input_dir, c, 'true_noticed.txt')
+            with open(true_noticed_filepath, 'r', errors='ignore') as f:
+                true_noticed_cases = f.readlines()
+
+            dst_true_noticed_filepath = os.path.join(output_case_folder, 'noticed_cases.txt')
+            with open(dst_true_noticed_filepath, 'w') as f:
+                candidates_src = os.listdir(input_candidates_folder)
+                cand_number = 1
+                for cand in candidates_src:
+                    cand_src = os.path.join(input_candidates_folder, cand)
+                    cand_dst = os.path.join(output_candidates_folder, '{:03d}'.format(cand_number)+'.txt')
+                    map_file.write('\t' + cand_src + '=' + cand_dst + '\n')
+
+                    shutil.copy(cand_src, cand_dst)
+                    cand_id = os.path.splitext(cand)[0]
+                    if cand_id+'\n' in true_noticed_cases:
+                        f.write('{:03d}'.format(cand_number)+'\n')
+
+                    cand_number += 1
+
+            case_number += 1
+
+
+def package_task2_release(input_dir, output_dir, training_size):
+    os.makedirs(output_dir)
+
+    cases = os.listdir(input_dir)
+    indices = list(range(0, len(cases)))
+    shuffle(indices)
+    train_indices = indices[:training_size]
+    test_indices = indices[training_size:]
+
+    train_cases = [cases[i] for i in train_indices]
+    test_cases = [cases[i] for i in test_indices]
+
+    package_task2_cases(input_dir, train_cases, os.path.join(output_dir, 'train'))
+    package_task2_cases(input_dir, test_cases, os.path.join(output_dir, 'test'))
+
+
+def package_task2_cases(input_dir, cases, output_dir):
+    os.makedirs(output_dir)
+    mapping_filepath = os.path.join(output_dir, 'mapping.txt')
+    with open(mapping_filepath, 'w') as map_file:
+        case_number = 1
+        for c in cases:
+            print('processing '+c)
+            output_case_folder = os.path.join(output_dir, '{:03d}'.format(case_number))
+            output_paragraphs_folder = os.path.join(output_case_folder, 'paragraphs')
+            os.makedirs(output_paragraphs_folder)
+            output_base_case_filepath = os.path.join(output_case_folder, 'base_case.txt')
+            input_base_case_folder =  os.path.join(input_dir, c)
+            input_base_case_filepath = os.path.join(input_base_case_folder, c + '_blackedout.txt')
+            map_file.write(input_base_case_folder + '=' + output_case_folder + '\n')
+
+            entailed_frag_src = os.path.join(input_base_case_folder, 'entailed_fragment.txt')
+            entailed_frag_dst = os.path.join(output_case_folder, 'entailed_fragment.txt')
+            shutil.copy(entailed_frag_src, entailed_frag_dst)
+
+            shutil.copy(input_base_case_filepath, output_base_case_filepath)
+            input_paragraphs_folder = get_input_paragraphs_folder(os.path.join(input_dir, c))
+            src_paragraphs = os.listdir(input_paragraphs_folder)
+
+            dst_true_entailment_filepath = os.path.join(output_case_folder, 'entailing_paragraphs.txt')
+            with open(dst_true_entailment_filepath, 'w') as f:
+                parag_number = 1
+                for parag in src_paragraphs:
+                    parag_src = os.path.join(input_paragraphs_folder, parag)
+                    parag_dst = os.path.join(output_paragraphs_folder, '{:03d}'.format(parag_number)+'.txt')
+                    shutil.copy(parag_src, parag_dst)
+                    if 'True' in parag:
+                        f.write('{:03d}'.format(parag_number)+'\n')
+
+                    parag_number += 1
+
+            case_number += 1
+
+
+def get_input_paragraphs_folder(case_path):
+    parag_folder = os.path.join(case_path, 'paragraphs')
+    folders = os.listdir(parag_folder)
+    if len(folders) == 1:
+        return os.path.join(parag_folder, folders[0])
+    else:
+        return None
+
+
+def create_task1_xml (input_dir):
+    xml_path = os.path.join(input_dir, 'task1.xml')
+    with open(xml_path, 'w') as xml:
+        xml.write('<COLIEE task=\'1\'>\n')
+
+        cases = os.listdir(input_dir)
+        id = 1
+        for c in cases:
+            if os.path.isdir(os.path.join(input_dir, c)):
+                noticed_path = os.path.join(input_dir, c, 'noticed_cases.txt')
+                cases_noticed = []
+                if os.path.exists(noticed_path):
+                    with open(noticed_path, 'r') as noticed_file:
+                        cases_noticed = noticed_file.readlines()
+                        cases_noticed = list(map(lambda s: s.strip(), cases_noticed))
+                xml.write('<instance id=\''+'{:03d}'.format(id)+'\'>\n')
+                xml.write('\t<query>'+c+'/'+'base_case.txt</query>\n')
+                xml.write('\t<candidate_cases>\n')
+                for cand in range(1,201):
+                    xml.write('\t\t<candidate_case id=\''+'{:03d}'.format(cand)+'\'>'+'{:03d}'.format(cand)+'.txt</candidate_case>\n')
+                xml.write('\t</candidate_cases>\n')
+                if len(cases_noticed)>0:
+                    xml.write('\t<cases_noticed>'+','.join(cases_noticed)+'</cases_noticed>\n')
+                xml.write('</instance>\n')
+
+                id += 1
+
+        xml.write('</COLIEE>')
+
+
+def create_task2_xml (input_dir):
+    xml_path = os.path.join(input_dir, 'task2.xml')
+    with open(xml_path, 'w') as xml:
+        xml.write('<COLIEE task=\'2\'>\n')
+
+        cases = os.listdir(input_dir)
+        id = 1
+        for c in cases:
+            if os.path.isdir(os.path.join(input_dir, c)):
+                entailing_path = os.path.join(input_dir, c, 'entailing_paragraphs.txt')
+                entailing_parags = []
+                if os.path.exists(entailing_path):
+                    with open(entailing_path, 'r') as entailing_file:
+                        entailing_parags = entailing_file.readlines()
+                        entailing_parags = list(map(lambda s: s.strip(), entailing_parags))
+
+                xml.write('<instance id=\''+'{:03d}'.format(id)+'\'>\n')
+                xml.write('\t<query>\n')
+                xml.write('\t\t<base_case>'+'{:03d}'.format(id)+'/base_case.txt</base_case>\n')
+                xml.write('\t\t<entailed_fragment>' + '{:03d}'.format(id) + '/entailed_fragment.txt</entailed_fragment>\n')
+                xml.write('\t</query>\n')
+                xml.write('\t<noticed_case>\n')
+                paragraphs = os.listdir(os.path.join(input_dir, c, 'paragraphs'))
+                for p in paragraphs:
+                    xml.write('\t\t<paragraph id=\''+os.path.splitext(p)[0]+'\'>'+p+'</paragraph>\n')
+                xml.write('\t</noticed_case>\n')
+                if len(entailing_parags) > 0:
+                    xml.write('\t<entailing_paragraphs>'+','.join(entailing_parags)+'</entailing_paragraphs>\n')
+                xml.write('</instance>\n')
+
+                id += 1
+
+        xml.write('</COLIEE>')
+
+
+if __name__ == '__main__':
+#    prepare_ir_data_with_index('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged',
+#                    'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\ir_files_20181214-3',
+#                    num_candidates_per_case=200)
+
+#    prepare_entail_data('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged',
+#                        'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task1',
+#                        'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task2_refined_2')
+
+#    package_task2_dataset('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task2_refined_2',
+#                          'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task2_packaged')
+
+    #create_task1_xml('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task1_release_map\\train')
+    create_task1_xml('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task1_release_map\\test_with_labels')
+    #create_task2_xml('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\EE_task2_release_map\\train')
+    #create_task2_xml('C:\\juliano\\dev\\data\\coliee2019\\data_prep\\EE_task2_release_map\\test_with_labels ')
+#    package_task1_release('C:\juliano\dev\data\coliee2019\data_prep\IR_task1', 'C:\juliano\dev\data\coliee2019\data_prep\IR_task1_release_map', 285)
+#    package_task2_release('C:\juliano\dev\data\coliee2019\data_prep\EE_task2', 'C:\juliano\dev\data\coliee2019\data_prep\EE_task2_release_map', 181)
