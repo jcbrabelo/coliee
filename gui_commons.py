@@ -1,6 +1,6 @@
 
 
-def coords_before(before, after):
+def coords_before_(before, after):
     return before[0] < after[0] or (before[0] == after[0] and before[1] < after[1])
 
 
