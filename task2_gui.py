@@ -2,15 +2,24 @@ import tkinter
 from tkinter import *
 from tkinter import messagebox
 import os
+import tkinter.messagebox
 from gui_commons import *
-#from prepare_data import find_refs
-from package_data import extract_paragraphs
 
+import shutil
+import re
+import dbutils as db
+import case_files_utils as cfu
+import webbrowser
+from langchain.text_splitter import TokenTextSplitter
 
-INPUT_DIR = 'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\IR_task2_refined_2'
-RAW_CONTENT_DIR = 'C:\\juliano\\dev\\data\\coliee2019\\data_prep\\files_merged'
+from typing import List, Dict, Tuple
+import openai
 
-global dir_index, dir_list, entailing_index, entailing_list
+openai.organization = os.getenv('OPENAI_ORG')
+openai.api_key = os.getenv('OPENAI_API_KEY')
+
+OUTPUT_DIR = '/Users/jrabelo/Documents/coliee2025/task2_prep'
+
 NORMAL_PARAG_TAG = 'NPT'
 ENTAILING_PARAG_TAG = 'EPT'
 ENTAILING_EDIT_TAG = 'EET'
@@ -19,44 +28,32 @@ REFERENCE_TAG = 'REF'
 REMOVED_REFERENCE_TAG = 'REM_REF'
 
 PARAGRAPH_REF_PAT = re.compile('\\bpara(?:graph)?s?\\b')
+TITLE_PAT = None
 
-
-def find_next_case (dir_index, dir_list):
-    while dir_index < len(dir_list):
-        case_id = dir_list[dir_index]
-        entailed_sentence_filepath = os.path.join(INPUT_DIR, case_id, 'entailed_fragment.txt')
-        skip_filepath = os.path.join(INPUT_DIR, case_id, 'skip.txt')
-        if not os.path.exists(entailed_sentence_filepath) and not os.path.exists(skip_filepath):
-            return dir_index
-        else:
-            dir_index += 1
-
-    return -1
+noticed_iter = None
+case_gen = db.task2_generator()
 
 
 def load_next_case():
-    global dir_index, dir_list
-
-    next_index = find_next_case(dir_index, dir_list)
-    if next_index < 0:
-        messagebox.showinfo("Warning", "No more cases.")
-    else:
-        dir_index = next_index
-        load_case(next_index, dir_list)
+    try:
+        case_id, noticed_ids = next(case_gen)
+        load_case(case_id, noticed_ids)
+    except StopIteration:
+        messagebox.showinfo('Warning', 'No more cases.')
 
 
 def find_paragraph_refs():
-    occurs = re.finditer(PARAGRAPH_REF_PAT, text_entailed.get(1.0, END))
-    parags = []
-    for occur in occurs:
-        parags.append((occur.start(), occur.end()))
+    return cfu.find_pattern_in_text(PARAGRAPH_REF_PAT, text_entailed.get(1.0, END))
 
-    return parags
+
+def find_title_refs():
+    return cfu.find_pattern_in_text(TITLE_PAT, text_entailed.get(1.0, END))
 
 
 def highlight_parag_refs():
-    ref_ranges = find_paragraph_refs()
-    for ref in ref_ranges:
+    parag_ranges = find_paragraph_refs()
+    title_ranges = find_title_refs()
+    for ref in parag_ranges+title_ranges:
         text_entailed.tag_add(REFERENCE_TAG, index_to_text_coord(ref[0]), index_to_text_coord(ref[1]))
 
 
@@ -76,7 +73,7 @@ def select_range_containing(ranges, index):
     i=0
     while True:
         if i >= len(ranges):
-           return None
+            return None
 
         start = ranges[i]
         end = ranges[i+1]
@@ -88,124 +85,213 @@ def select_range_containing(ranges, index):
         i += 2
 
 
-#def highlight_refs():
-#    ref_ranges = find_refs(text_entailed.get(1.0, END))
-#    for ref in ref_ranges:
-#        text_entailed.tag_add(REFERENCE_TAG, index_to_text_coord(ref[0]), index_to_text_coord(ref[1]))
+def load_case(case_id, noticed_ids):
+    global noticed_iter
 
+    if len(noticed_ids) == 0:
+        print('No cases cited by {}'.format(case_id))
+        db.t2_save_case_db(case_id, None, None, None)
+        load_next_case()
+        return
 
-def load_case(case_index, dir_list):
-    global entailing_list, entailing_index
+    base_path = cfu.find_case_contents_path(case_id)
+    if base_path is None:
+        print('Skipping invalid case contents')
+        db.t2_save_case_db(case_id, None, None, None)
+        load_next_case()
+        return
 
-    base_dir, case_filepath = get_current_base_dir_and_filepath()
-
-    with open(case_filepath, mode='r', encoding='utf-8', errors='ignore') as f:
-        contents = f.read()
+    print('Loading base case: {}'.format(case_id))
+    contents = cfu.get_inner_text(base_path)
 
     text_entailed.config(state=NORMAL)
-    text_entailed .delete('1.0', END)
+    text_entailed.delete('1.0', END)
     text_entailed.insert(END, contents)
-    text_entailed.config(state=DISABLED)
 
-    var_lb_entailed.set(dir_list[case_index])
+    var_lb_entailed.set(case_id)
 
-    entailing_index = 0
-    load_entailing_case()
-    highlight_parag_refs()
-
-
-def load_entailing_case():
-    global entailing_index, entailing_list
-
-    base_dir, _ = get_current_base_dir_and_filepath()
-    cited_dirpath = os.path.join(base_dir, 'cited')
-    entailing_list = os.listdir(cited_dirpath)
-
-    cited_case_filepath = get_current_entailing_filepath()
-
-    with open(cited_case_filepath, mode='r', encoding='utf-8', errors='ignore') as f:
-        contents = f.read()
-
-    text_entailing.config(state=NORMAL)
-    text_entailing .delete('1.0', END)
-    text_entailing.insert(END, contents)
-    text_entailing.config(state=DISABLED)
-
-    var_lb_entailing.set(entailing_list[entailing_index])
-    entailing_index = entailing_index
-
-
-def load_next_entailing():
-    global entailing_index
-
-    next_ent_index = find_next_entailing()
-    if next_ent_index < 0:
-        messagebox.showinfo('Warning', 'No more entailing cases for this case.')
+    noticed_iter = iter(noticed_ids)
+    if load_entailing_case(False):
+        highlight_parag_refs()
     else:
-        entailing_index = next_ent_index
-        load_entailing_case()
+        load_next_case()
 
 
-def find_next_entailing():
-    global entailing_index, entailing_list
+def is_cited_in_base_case(cited_id):
+    global TITLE_PAT
 
-    if len(entailing_list) > entailing_index+1:
-        return entailing_index+1
-    else:
-        return -1
+    titles = db.get_titles(cited_id)
+    base_contents = text_entailed.get(1.0, END)
+    base_contents = re.sub(r'\s+', ' ', base_contents)
+
+    if PARAGRAPH_REF_PAT.search(base_contents) is not None:
+        title_pat_str = ''
+        for title in titles:
+            if len(title_pat_str) > 0:
+                title_pat_str += '|'
+            title = re.sub(r'\s+', ' ', title)
+            title = title.replace('(', r'\(')
+            title = title.replace(')', r'\)')
+            title_pat_str += '(?:{})'.format(title)
+
+        TITLE_PAT = re.compile(title_pat_str, flags=re.MULTILINE)
+
+        if TITLE_PAT.search(base_contents) is not None:
+            return True
+
+    return False
+
+
+def load_entailing_case(iterative_mode=True):
+    global noticed_iter
+
+    try:
+        while True:
+            cited_id = next(noticed_iter)
+            if is_cited_in_base_case(cited_id):
+                print('Loading cited case: {}'.format(cited_id))
+                cited_path = cfu.find_case_contents_path(cited_id)
+
+                if cited_path is None:
+                    print('Skipping invalid case contents')
+                    continue
+
+                contents = cfu.get_inner_text(cited_path)
+
+                text_entailing.config(state=NORMAL)
+                text_entailing.delete('1.0', END)
+                text_entailing.insert(END, contents)
+                # text_entailing.config(state=DISABLED)  #works in Windows but makes Text not to respond to mouse/keyboard events in Macos
+
+                var_lb_entailing.set(cited_id)
+
+                highlight_paragraphs()
+
+                return True
+            else:
+                text_entailing.config(state=NORMAL)
+                text_entailing.delete('1.0', END)
+                msg = 'Skipping case {} as it is not cited in the contents of the \
+                    base case'.format(cited_id)
+                text_entailing.insert(END, msg)
+                var_lb_entailing.set(cited_id)
+
+                if iterative_mode:
+                    messagebox.showinfo('Warning', msg)
+                else:
+                    print(msg)
+
+    except StopIteration:
+        if iterative_mode:
+            messagebox.showinfo('Warning', 'No more entailing cases for this case.')
+        else:
+            print('No more entailing cases for this case.')
+            case_id = get_current_case_id()
+            db.t2_save_case_db(case_id, None, None, None)
+
+        return False
 
 
 def load_prev_entailing():
-    global entailing_index
-
-    prev_ent_index = find_prev_entailing()
-    if prev_ent_index < 0:
-        messagebox.showinfo('Warning', 'No more entailing cases for this case.')
-    else:
-        entailing_index= prev_ent_index
-        load_entailing_case()
-
-    return prev_ent_index
+    pass
 
 
 def find_prev_entailing():
-    global entailing_index, entailing_list
-
-    if entailing_index > 0:
-        return entailing_index-1
-    else:
-        return -1
+    pass
 
 
 def key_pressed_entailed(event):
     if event.char == 'd':
-        event.widget.tag_add(ENTAILED_FRAGMENT_TAG, event.widget.index(tkinter.SEL_FIRST), event.widget.index(tkinter.SEL_LAST))
+        event.widget.tag_add(ENTAILED_FRAGMENT_TAG, event.widget.index(tkinter.SEL_FIRST),
+                             event.widget.index(tkinter.SEL_LAST))
         event.widget.tag_remove(SEL, 1.0, END)
     elif event.char == 'b':
         event.widget.tag_add(REMOVED_REFERENCE_TAG, event.widget.index(tkinter.SEL_FIRST),
                              event.widget.index(tkinter.SEL_LAST))
         event.widget.tag_remove(SEL, 1.0, END)
+    elif event.char == 'o':
+        selected = event.widget.get(
+            event.widget.index(tkinter.SEL_FIRST),
+            event.widget.index(tkinter.SEL_LAST)
+        )
+        event.widget.tag_remove(SEL, 1.0, END)
+
+        paragraphs = text_entailing.get(1.0, END)
+    
+        entailing_paragraphs = get_entailing_paragraphs(selected, paragraphs)
+        if entailing_paragraphs:
+            messagebox.showinfo('Entaling paragraphs', entailing_paragraphs)
+        else:
+            messagebox.showinfo('Info', 'No entailing paragraphs found')
+
+    return 'break'
+
+
+def get_entailing_paragraphs(fragment: str, paragraphs: str) -> List[str]:
+    SAFETY_MARGIN = 200
+    text_splitter = TokenTextSplitter(
+        chunk_size=16 * 1024 - SAFETY_MARGIN, chunk_overlap=100
+    )
+    texts = text_splitter.split_text(paragraphs)
+
+    results = []
+    for text in texts:
+        prompt = (
+            'Consider the following legal case paragraphs:\n'
+            '###\n'
+            f'{text}\n'
+            '###\n'
+            'Considering the above paragraphs, output the paragraph numbers that entail the following conclusion:\n'
+            '###\n'
+            f'{fragment}\n'
+            '###\n'
+            'Output "none" if there is no paragraphs above that entail the given conclusion.'
+        )
+
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo-16k",
+                messages=[
+                    {"role": "system", "content": "You are an insightful legal expert."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+        except openai.error.InvalidRequestError as e:
+            messagebox.showinfo('Error', e)
+            return None
+
+        result = response['choices'][0]['message']['content']
+
+        if not 'none' == result.lower():
+            results.append(result)
+
+    return results
 
 
 def save_case():
-    if not save_entailed_fragment():
+    case_id = get_current_case_id()
+    noticed_id = get_current_noticed_id()
+    output_case_dir = os.path.join(OUTPUT_DIR, cfu.filter_case_id(case_id))
+    if os.path.exists(output_case_dir):
+        shutil.rmtree(output_case_dir)
+
+    os.makedirs(output_case_dir)
+
+    entailed_frag = save_entailed_fragment(output_case_dir)
+    if entailed_frag is None:
         messagebox.showwarning('Warning', 'Necessary to select exactly one entailed fragment')
         return False
-    save_paragraphs()
-    save_blackedout_entailed_case()
+
+    entailing_parags = save_paragraphs(output_case_dir)
+    save_blackedout_entailed_case(output_case_dir)
+    db.t2_save_case_db(case_id, noticed_id, entailed_frag, entailing_parags)
 
     return True
 
 
-def save_blackedout_entailed_case():
-    #global dir_index, dir_list
-
+def save_blackedout_entailed_case(output_case_dir):
     REMOVED_REF_MARK = 'FRAGMENT_SUPPRESSED'
 
-    case_dir, _ = get_current_base_dir_and_filepath()
-    blackedout_filepath = os.path.join(case_dir, os.path.basename(case_dir)+'_blackedout.txt')
-
-    contents = text_entailed.get(1.0, END)
     refs = text_entailed.tag_ranges(REMOVED_REFERENCE_TAG)
 
     index_ref = 0
@@ -220,20 +306,26 @@ def save_blackedout_entailed_case():
 
     blacked_out += text_entailed.get(last_frag_end, END)
 
+    blackedout_filepath = os.path.join(output_case_dir, 'base_case.txt')
     with open(blackedout_filepath, mode='w', encoding='utf-8', errors='ignore') as f:
         f.write(blacked_out)
 
 
-def save_paragraphs():
-    entailing_filepath = get_current_entailing_filepath()
-    case_dir, _ = get_current_base_dir_and_filepath()
-    paragraphs_dir = os.path.join(case_dir, 'paragraphs', os.path.basename(entailing_filepath))
+def get_current_case_id():
+    return var_lb_entailed.get()
+
+
+def get_current_noticed_id():
+    return var_lb_entailing.get()
+
+
+def save_paragraphs(output_case_dir):
+    entailing_parags = []
+    paragraphs_dir = os.path.join(output_case_dir, 'paragraphs')
     os.makedirs(paragraphs_dir)
 
     normal_parag_ranges = text_entailing.tag_ranges(NORMAL_PARAG_TAG)
     entailing_parag_ranges = text_entailing.tag_ranges(ENTAILING_PARAG_TAG)
-
-    contents = text_entailing.get(1.0, END)
 
     index_normal = 0
     index_entailing = 0
@@ -244,50 +336,54 @@ def save_paragraphs():
         if index_normal >= len(normal_parag_ranges):
             normal_start = None
         else:
-            normal_start = get_num_coords(text_entailing.index(normal_parag_ranges[index_normal]))
+            normal_start = normal_parag_ranges[index_normal]
 
         if index_entailing >= len(entailing_parag_ranges):
             entail_start = None
         else:
             entail_start = get_num_coords(text_entailing.index(entailing_parag_ranges[index_entailing]))
+            entail_start = entailing_parag_ranges[index_entailing]
 
         done = normal_start is None and entail_start is None
 
         if not done:
             is_entail = False
-            if entail_start is None or coords_before(normal_start, entail_start):
-                parag_start = text_entailing.index(normal_parag_ranges[index_normal])
-                parag_end = text_entailing.index(normal_parag_ranges[index_normal+1])
+            if entail_start is None or (normal_start is not None and text_entailing.compare(normal_start, '<=', entail_start)): # coords_before(normal_start, entail_start)):
+                parag_start = normal_parag_ranges[index_normal]
+                parag_end = normal_parag_ranges[index_normal+1]
                 index_normal += 2
-            elif normal_start is None or coords_before(entail_start, normal_start):
+            elif normal_start is None or (entail_start is not None and text_entailing.compare(entail_start, '<=', normal_start)): # coords_before(entail_start, normal_start)):
                 is_entail = True
-                parag_start = text_entailing.index(entailing_parag_ranges[index_entailing])
-                parag_end = text_entailing.index(entailing_parag_ranges[index_entailing + 1])
+                parag_start = entailing_parag_ranges[index_entailing]
+                parag_end = entailing_parag_ranges[index_entailing + 1]
                 index_entailing += 2
 
             parag_txt = text_entailing.get(parag_start, parag_end)
-            parag_filepath = os.path.join(paragraphs_dir, ('%03d' % parag_index)+'_'+str(is_entail)+'.txt')
+            parag_filepath = os.path.join(paragraphs_dir, ('%03d' % parag_index)+'.txt')
             with open(parag_filepath, mode='w', encoding='utf-8', errors='ignore') as f:
                 f.write(parag_txt)
 
+            if is_entail:
+                entailing_parags.append(parag_index)
+
             parag_index += 1
 
+    return entailing_parags
 
-def save_entailed_fragment():
+
+def save_entailed_fragment(output_case_dir):
     ent_frag_ranges = text_entailed.tag_ranges(ENTAILED_FRAGMENT_TAG)
     if len(ent_frag_ranges) != 2:
-        return False
+        return None
 
     frag_start = ent_frag_ranges[0]
     frag_end = ent_frag_ranges[1]
 
-    case_dir, _ = get_current_base_dir_and_filepath()
-    ent_frag_filepath = os.path.join(case_dir, 'entailed_fragment.txt')
-
+    ent_frag_filepath = os.path.join(output_case_dir, 'entailed_fragment.txt')
     with open(ent_frag_filepath, mode='w', encoding='utf-8', errors='ignore') as f:
         f.write(text_entailed.get(frag_start, frag_end))
 
-    return True
+    return text_entailed.get(frag_start, frag_end)
 
 
 def save_and_next():
@@ -296,10 +392,8 @@ def save_and_next():
 
 
 def skip():
-    case_dir, _ = get_current_base_dir_and_filepath()
-    skip_filepath = os.path.join(case_dir, 'skip.txt')
-    with open(skip_filepath, mode='w', encoding='utf-8', errors='ignore') as f:
-        f.write('.')
+    case_id = get_current_case_id()
+    db.t2_save_case_db(case_id, None, None, None)
 
     load_next_case()
 
@@ -341,11 +435,14 @@ def key_pressed_entailing(event):
 
     print('done')
 
+    return 'break'
+
 
 def save_edit_parag():
     range = text_entailing.tag_ranges(ENTAILING_EDIT_TAG)
     if range:
         text_entailing.tag_remove(ENTAILING_EDIT_TAG, 1.0, END)
+
 
 def move_lower_bound_up(event):
     move_bounds(False, False, True, False)
@@ -404,26 +501,9 @@ def mark_last_entailing_parag():
         text_entailing.tag_add(ENTAILING_PARAG_TAG, last_range_start, last_range_end)
 
 
-def get_current_base_dir_and_filepath():
-    global dir_index, dir_list
-    base_dir = os.path.join(INPUT_DIR, dir_list[dir_index])
-    base_filepath = os.path.join(base_dir, dir_list[dir_index]+'.txt')
-
-    return base_dir, base_filepath
-
-
-def get_current_entailing_filepath():
-    global entailing_index, entailing_list
-
-    base_dir, _ = get_current_base_dir_and_filepath()
-    cited_dirpath = os.path.join(base_dir, 'cited')
-
-    return os.path.join(cited_dirpath, entailing_list[entailing_index])
-
-
 def highlight_paragraphs():
     txt = text_entailing.get(1.0, END)
-    parag_pat = re.compile('^ {0,3}\\[(\\d{1,3})\\]\\s+', re.MULTILINE)
+    parag_pat = re.compile(r'^ {0,3}\[(\d{1,3})\]\s+', re.MULTILINE)
 
     occurs = re.finditer(parag_pat, txt)
     last_parag_num = 0
@@ -439,10 +519,6 @@ def highlight_paragraphs():
             last_parag_start = occur.start()
             last_parag_num += 1
 
-    #if last_parag_start >= 0:
-    #    text_entailing.tag_add(NORMAL_PARAG_TAG, '1.0+' + str(last_parag_start) + 'c',
-     #                          '1.0+' + str(occur.start()) + 'c')
-
 
 def find_last_parag_end(txt, cur_parag_start):
     occurs = re.finditer('[^\\s]', txt[cur_parag_start-20:cur_parag_start], re.MULTILINE)
@@ -452,20 +528,38 @@ def find_last_parag_end(txt, cur_parag_start):
     return last.end() + len(txt[0:cur_parag_start-20])
 
 
-if __name__ == '__main__':
-    dir_index = 0
-    dir_list = os.listdir(INPUT_DIR)
-    entailing_index=0
-    entailing_list=[]
+def help():
+    tkinter.messagebox.showinfo(
+        title="Help",
+        message="Help",
+        detail=(
+            "- Entailed case (left box):\n"
+            "|-- First, select a fragment of text. These are the commands available: \n"
+            "|---- d: highlights the decision (GREEN). Only one fragment can be marked as 'decision';\n"
+            "|---- b: 'blocks' content: the fragment is removed from the content file because it may contain information that give away the answer (ORANGE). Any number of fragments can be marked as 'blocked';\n\n"
+            "- Entaling case (right box):\n"
+            "|-- clicking a paragraph will select it (RED).\n"
+            "|-- you can change the bounds of a selected paragraph if the auto paragraph detection didn't work:\n"
+            "|---- UP/DOWN: moves the upper bounds;\n"
+            "|---- LEFT/RIGHT: moves the lower bounds.\n"
+            "|-- e: marks the selected paragraph as 'entailing' (BROWN). You can mark one or more paragraphs as 'entailing'."
+        )
+    )
 
+def open_case(event):
+    case_id = cfu.filter_case_id(event.widget.cget('text'))
+    print('Opening case {}'.format(case_id))
+    html_filepath = cfu.find_case_contents_path(case_id)
+    webbrowser.get('safari').open_new('file://'+html_filepath)
+
+
+if __name__ == '__main__':
     top = tkinter.Tk()
     top.title('COLIEE Case Law Entailment Data Prep')
     top.grid_rowconfigure(0, weight=1)
-    #top.grid_rowconfigure(1, weight=1)
     top.grid_columnconfigure(0, weight=3)
     top.grid_columnconfigure(1, weight=3)
     top.grid_columnconfigure(2, weight=1)
-    #top.attributes('-fullscreen', True)
 
     fr_entailed = Frame(top, bd=2, relief=SUNKEN)
 
@@ -480,6 +574,7 @@ if __name__ == '__main__':
     var_lb_entailed.set('Entailed case')
     lb_entailed_case = Label(fr_entailed, textvariable=var_lb_entailed)
     lb_entailed_case.grid(row=0, column=0)
+    lb_entailed_case.bind('<Button-1>', open_case)
 
     text_entailed = Text(fr_entailed, wrap=WORD, yscrollcommand=yscrollbar_entailed.set)
     text_entailed.grid_rowconfigure(0, weight=1)
@@ -495,10 +590,7 @@ if __name__ == '__main__':
     text_entailed.tag_raise(SEL)
     text_entailed.bind('<Key>', key_pressed_entailed)
 
-    #text_entailed.bind('<Return>', enter_pressed)
-    #text_entailed.bind('<Key>', key_pressed)
-
-    #entailing (cited) frame:
+    # entailing (cited) frame:
     fr_entailing = Frame(top, bd=2, relief=SUNKEN)
 
     fr_entailing.grid_rowconfigure(0, weight=1)
@@ -507,18 +599,16 @@ if __name__ == '__main__':
     fr_entailing.grid_columnconfigure(1, weight=1)
     fr_entailing.grid_columnconfigure(2, weight=1)
 
-
     yscrollbar_entailing = Scrollbar(fr_entailing)
     yscrollbar_entailing.grid(row=1, column=4, sticky=N + S)
 
     var_lb_entailing = StringVar()
     var_lb_entailing.set('Entailing case')
     lb_entailing_case = Label(fr_entailing, textvariable=var_lb_entailing)
+    lb_entailing_case.bind('<Button-1>', open_case)
     lb_entailing_case.grid(row=0, column=1, sticky=E + W)
 
-    bt_prev_entailing = Button(fr_entailing, text='Previous', command=load_prev_entailing)
-    bt_prev_entailing.grid(row=0, column=0)
-    bt_next_entailing = Button(fr_entailing, text='Next', command=load_next_entailing)
+    bt_next_entailing = Button(fr_entailing, text='Next', command=load_entailing_case)
     bt_next_entailing.grid(row=0, column=2)
 
     text_entailing = Text(fr_entailing, wrap=WORD, yscrollcommand=yscrollbar_entailing.set)
@@ -538,15 +628,12 @@ if __name__ == '__main__':
 
     text_entailing.bind('<Up>', move_upper_bound_up)
     text_entailing.bind('<Down>', move_upper_bound_down)
-    text_entailing.bind('<Alt-Up>', move_lower_bound_up)
-    text_entailing.bind('<Alt-Down>', move_lower_bound_down)
+    text_entailing.bind('<Left>', move_lower_bound_up)
+    text_entailing.bind('<Right>', move_lower_bound_down)
 
     text_entailing.bind('<ButtonRelease-1>', bt1_release_entailing)
 
-    # text_entailing.bind('<Return>', enter_pressed)
-    #text_entailing.bind('<Key>', key_pressed)
-
-    #FRAME INFO
+    # FRAME INFO
     fr_info = Frame(top, bd=2, relief=SUNKEN)
     fr_info.grid_rowconfigure(0, weight=1)
     fr_info.grid_rowconfigure(1, weight=1)
@@ -555,18 +642,17 @@ if __name__ == '__main__':
     bt_save = Button(fr_info, text='Save', command=save_and_next)
     bt_save.grid(row=0, column=0)
 
-    bt_skip = Button(fr_info, text='Skip', command=skip)
-    bt_skip.grid(row=1, column=0)
+    bt_parags = Button(fr_info, text="Help", command=help)
+    bt_parags.grid(row=1, column=0)
 
-    bt_parags = Button(fr_info, text='Paragraphs', command=highlight_paragraphs)
-    bt_parags.grid(row=2, column=0)
+    bt_skip = Button(fr_info, text='Skip', command=skip)
+    bt_skip.grid(row=2, column=0)
+
+    # bt_parags = Button(fr_info, text='Paragraphs', command=highlight_paragraphs)
+    # bt_parags.grid(row=2, column=0)
 
     fr_info.grid(row=0, column=6)
-
-    #Label(fr_info, text='Paragraph count: ')
-
 
     load_next_case()
 
     top.mainloop()
-
