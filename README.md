@@ -1,6 +1,16 @@
 # COLIEE - Case Law data preparation
 This repo contains code to aid with the case law data prep.
 
+## Setup
+Make sure you are using Python 3.8.
+
+Run:
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
 ## Task 1 - Retrieval
 For the retrieval task, the process is fully automatic: we need to run the code that grabs a sample still not used from the dataset, removes the direct citations present in the case contents and it the cases + labels to the test dataset.
 
